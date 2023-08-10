@@ -49,11 +49,11 @@ class Metrics:
             ),
             namespace=NAMESPACE,
         )
-        self.requests_latency_by_view_method = self.register_metric(
+        self.requests_latency_by_view_method_endpoint = self.register_metric(
             Histogram,
-            "django_http_requests_latency_seconds_by_view_method",
-            "Histogram of request processing time labelled by view.",
-            ["view", "method"],
+            "django_http_requests_latency_seconds_by_view_method_endpoint",
+            "Histogram of request processing time labelled by view and endpoint.",
+            ["view", "method", "endpoint"],
             buckets=PROMETHEUS_LATENCY_BUCKETS,
             namespace=NAMESPACE,
         )
@@ -85,11 +85,11 @@ class Metrics:
             namespace=NAMESPACE,
         )
         # Set in process_view
-        self.requests_by_view_transport_method = self.register_metric(
+        self.requests_by_view_transport_method_endpoint = self.register_metric(
             Counter,
-            "django_http_requests_total_by_view_transport_method",
-            "Count of requests by view, transport, method.",
-            ["view", "transport", "method"],
+            "django_http_requests_total_by_view_transport_method_endpoint",
+            "Count of requests by view, transport, method and endpoint.",
+            ["view", "transport", "method", "endpoint"],
             namespace=NAMESPACE,
         )
         self.requests_body_bytes = self.register_metric(
@@ -115,11 +115,11 @@ class Metrics:
             ["status"],
             namespace=NAMESPACE,
         )
-        self.responses_by_status_view_method = self.register_metric(
+        self.responses_by_status_view_method_endpoint = self.register_metric(
             Counter,
-            "django_http_responses_total_by_status_view_method",
-            "Count of responses by status, view, method.",
-            ["status", "view", "method"],
+            "django_http_responses_total_by_status_view_method_endpoint",
+            "Count of responses by status, view, method and endpoint.",
+            ["status", "view", "method", "endpoint"],
             namespace=NAMESPACE,
         )
         self.responses_body_bytes = self.register_metric(
@@ -150,11 +150,11 @@ class Metrics:
             ["type"],
             namespace=NAMESPACE,
         )
-        self.exceptions_by_view = self.register_metric(
+        self.exceptions_by_view_endpoint = self.register_metric(
             Counter,
-            "django_http_exceptions_total_by_view",
-            "Count of exceptions by view.",
-            ["view"],
+            "django_http_exceptions_total_by_view_endpoint",
+            "Count of exceptions by view and endpoint.",
+            ["view", "endpoint"],
             namespace=NAMESPACE,
         )
 
@@ -234,17 +234,26 @@ class PrometheusAfterMiddleware(MiddlewareMixin):
                     view_name = request.resolver_match.view_name
         return view_name
 
+    def _get_endpoint_name(self, request):
+        endpoint_name = "<unnamed endpoint>"
+        if hasattr(request, "path"):
+            if request.path is not None:
+                endpoint_name = request.path
+        return endpoint_name
+
     def process_view(self, request, view_func, *view_args, **view_kwargs):
         transport = self._transport(request)
         method = self._method(request)
+        endpoint = self._get_endpoint_name(request)
         if hasattr(request, "resolver_match"):
             name = request.resolver_match.view_name or "<unnamed view>"
             self.label_metric(
-                self.metrics.requests_by_view_transport_method,
+                self.metrics.requests_by_view_transport_method_endpoint,
                 request,
                 view=name,
                 transport=transport,
                 method=method,
+                endpoint=endpoint
             ).inc()
 
     def process_template_response(self, request, response):
@@ -260,15 +269,17 @@ class PrometheusAfterMiddleware(MiddlewareMixin):
     def process_response(self, request, response):
         method = self._method(request)
         name = self._get_view_name(request)
+        endpoint = self._get_endpoint_name(request)
         status = str(response.status_code)
         self.label_metric(self.metrics.responses_by_status, request, response, status=status).inc()
         self.label_metric(
-            self.metrics.responses_by_status_view_method,
+            self.metrics.responses_by_status_view_method_endpoint,
             request,
             response,
             status=status,
             view=name,
             method=method,
+            endpoint=endpoint
         ).inc()
         if hasattr(response, "charset"):
             self.label_metric(
@@ -283,11 +294,12 @@ class PrometheusAfterMiddleware(MiddlewareMixin):
             self.label_metric(self.metrics.responses_body_bytes, request, response).observe(len(response.content))
         if hasattr(request, "prometheus_after_middleware_event"):
             self.label_metric(
-                self.metrics.requests_latency_by_view_method,
+                self.metrics.requests_latency_by_view_method_endpoint,
                 request,
                 response,
                 view=self._get_view_name(request),
                 method=request.method,
+                endpoint=self._get_endpoint_name(request)
             ).observe(TimeSince(request.prometheus_after_middleware_event))
         else:
             self.label_metric(self.metrics.requests_unknown_latency, request, response).inc()
@@ -297,13 +309,15 @@ class PrometheusAfterMiddleware(MiddlewareMixin):
         self.label_metric(self.metrics.exceptions_by_type, request, type=type(exception).__name__).inc()
         if hasattr(request, "resolver_match"):
             name = request.resolver_match.view_name or "<unnamed view>"
-            self.label_metric(self.metrics.exceptions_by_view, request, view=name).inc()
+            endpoint = self._get_endpoint_name(request)
+            self.label_metric(self.metrics.exceptions_by_view_endpoint, request, view=name, endpoint=endpoint).inc()
         if hasattr(request, "prometheus_after_middleware_event"):
             self.label_metric(
-                self.metrics.requests_latency_by_view_method,
+                self.metrics.requests_latency_by_view_method_endpoint,
                 request,
                 view=self._get_view_name(request),
                 method=request.method,
+                endpoint=self._get_endpoint_name(request)
             ).observe(TimeSince(request.prometheus_after_middleware_event))
         else:
             self.label_metric(self.metrics.requests_unknown_latency, request).inc()
